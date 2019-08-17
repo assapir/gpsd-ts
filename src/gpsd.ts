@@ -39,7 +39,7 @@ export class GPSD {
     public connect(connectOptions?: ConnectOptions): Promise<void> {
         return new Promise((resolve, reject) => {
             if (this._isConnected) {
-                return resolve;
+                return resolve();
             }
 
             let options: SocketConnectOpts = {
@@ -52,7 +52,7 @@ export class GPSD {
                     return resolve;
                 });
             } catch (error) {
-               reject(error); 
+               return reject(error); 
             }
         });
     }
