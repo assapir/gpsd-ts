@@ -17,7 +17,7 @@ export enum Fix {
 export interface Location {
     fix: Fix,
     lat?: string,
-    lin?: string
+    lon?: string
 }
 
 export class GPSD {
@@ -49,7 +49,7 @@ export class GPSD {
             try {
                 this._client.connect(options, () => {
                     this._isConnected = true;
-                    return resolve;
+                    return resolve();
                 });
             } catch (error) {
                return reject(error); 
