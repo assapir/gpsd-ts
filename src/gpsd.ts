@@ -1,4 +1,5 @@
 import { Socket, SocketConnectOpts } from "net";
+import { EventEmitter } from "events";
 
 const DEFAULT_PORT = 2947;
 const DEFAULT_HOST = `localhost`;
@@ -9,93 +10,122 @@ export interface ConnectOptions {
 }
 
 export enum Fix {
-    "No Fix",
-    "2D",
-    "3D"
+    NoFix,
+    TwoD,
+    ThreeD
 }
 
 export interface Location {
+    timeStamp: Date;
     fix: Fix,
     lat?: string,
     lon?: string
 }
 
-export class GPSD {
+export class GPSD extends EventEmitter {
     private _client: Socket;
     private _isConnected: boolean = false;
+    private _done: boolean = false;
+    private _location: Location = { fix: Fix.NoFix, timeStamp: new Date(0) };
 
     public get isConnected(): boolean {
         return this._isConnected;
     }
 
-    constructor() {
-        this._client = new Socket().setEncoding(`ascii`);
-        this.connect = this.connect.bind(this);
-        this.getLocation = this.getLocation.bind(this);
-        this.getData = this.getData.bind(this);
-        this.disconnect = this.disconnect.bind(this);
+    public get location(): Location | undefined {
+        if (!this._isConnected) {
+            return undefined;
+        }
+        return this._location;
     }
 
-    public connect(connectOptions?: ConnectOptions): Promise<void> {
+    constructor() {
+        super();
+        this._client = new Socket().setEncoding(`ascii`);
+        this.start = this.start.bind(this);
+        this.stop = this.start.bind(this);
+        this.close = this.close.bind(this);
+    }
+
+    public async start(connectOptions?: ConnectOptions): Promise<void> {
         return new Promise((resolve, reject) => {
-            if (this._isConnected) {
-                return resolve();
-            }
+            this._client.on('error', (error: any) => {
+                this._isConnected = false;
+                return reject(error);
+            });
 
             let options: SocketConnectOpts = {
                 port: connectOptions && connectOptions.port ? connectOptions.port : DEFAULT_PORT,
                 host: connectOptions && connectOptions.host ? connectOptions.host : DEFAULT_HOST,
             }
-            try {
-                this._client.connect(options, () => {
-                    this._isConnected = true;
-                    return resolve();
-                });
-            } catch (error) {
-               return reject(error); 
-            }
-        });
-    }
 
-    public async getLocation(): Promise<Location> {
-        this._client.write(`?WATCH={"enable":true,"json":true}`, (err) => {
-            if (err) {
-                throw err;
-            }
-        });
+            this._client.connect(options, () => {
+                this._client.write('?WATCH={"enable":true,"json":true}');
+            });
 
-        const raw = await this.getData();
-        const dataArray = raw.split(`\n`).filter(v => v); // remove empty elements
-        const filtered: object[] = dataArray
-            .map(value => JSON.parse(value))
-            .reduce((accumulator, obj) => {
-                if (obj[`class`] === "TPV") {
-                    accumulator.push(obj);
+            this._done = false;
+            this._client.on('data', (payload: string) => {
+                this._isConnected = true;
+                if (this._done) {
+                    return reject();
                 }
-                return accumulator;
-            }, []);
-
-        if (!filtered || filtered.length === 0) {
-            throw new Error(`no TPV found!`);
-        }
-
-        return (filtered as any);
-    }
-
-    public disconnect(): void {
-        this._isConnected = false;
-        this._client.destroy();
-    }
-
-    private async getData(): Promise<string> {
-        return new Promise((resolve, reject) => {
-            this._client.once(`data`, (raw: string) => {
-                return resolve(raw);
+                var info = payload.split('\n');
+                for (let i = 0; i < info.length; i++) {
+                    const value = info[i];
+                    let data: any;
+                    if (value && !this._done) {
+                        try {
+                            data = JSON.parse(value);
+                        } catch (error) {
+                            console.error("bad message format", value, error);
+                            continue;
+                        }
+                        switch (data.class) {
+                            case "TPV":
+                                this._location.timeStamp = new Date(data.time)
+                                if (this._location.lat !== data.lat || this._location !== data.lon) {
+                                    this._location.lat = data.lat;
+                                    this._location.lon = data.lon;
+                                    switch (data.mode) {
+                                        case 1:
+                                            this._location.fix = Fix.NoFix;
+                                            break;
+                                        case 2:
+                                            break
+                                        case 3:
+                                            this._location.fix = Fix.ThreeD;
+                                            break;
+                                        default:
+                                            break;
+                                    }
+                                }
+                                this.emit('gotLocation');
+                                break;
+                            default:
+                                continue;
+                        }
+                    } else if (!value) {
+                        continue;
+                    } else if (this._done) {
+                        break; // don't continue process
+                    }
+                }
             });
 
-            this._client.once(`error`, (err: Error) => {
-                return reject(err);
+            this.on('gotLocation', () => {
+                this.off('gotLocation', () => {});
+                return resolve();
             });
         });
+    }
+
+    public stop() {
+        this.removeAllListeners();
+        this._client.removeAllListeners();
+        this._done = true;
+    }
+
+    public close() {
+        this._client.end();
     }
 }

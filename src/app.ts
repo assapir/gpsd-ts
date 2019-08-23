@@ -1,11 +1,10 @@
 import { GPSD } from "./gpsd";
 
-const c = new GPSD();
-c.
-connect().then(async () => {
-    const loc = await c.getLocation();
-    console.log(loc);
+const g = new GPSD();
+g.start().then(async () => {
+    console.log(g.location);
+    console.log(g.location);
+    g.stop();
 }).catch((err) => {
-    console.log(err);
-    c.disconnect();
+    console.error(err);
 });
